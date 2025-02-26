@@ -1,133 +1,76 @@
-from tkinter import *
-import time
-import tkinter.messagebox
+from flask import Flask, render_template, request, redirect, url_for, flash, redirect, url_for,\
+    session, send_file
+from PyPDF2 import PdfReader
+from gtts import gTTS
+import os
 
-BACKGROUND_COLOR = "#003C43"
-MAX_LINE_LENGTH = 35 
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'add-secret-key-here'
+app.config['UPLOAD_FOLDER'] = 'uploads'
 
 
-instructions = "Don't stop writing or your text will disappear!"
-countdown_time = 10
+# Ensure the upload folder exists
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 
-def countdown():
-    global timer_running, popup_shown
-    time_elapse = int(check_elapsed_time())
-    if time_elapse > 5:
-        remaining_time = countdown_time - time_elapse
-        if remaining_time >= 0:
-            time_label.config(text=f"Time Left: {remaining_time:02d}")
-        else:
-            if not popup_shown:
-                popup_shown = True
-                prompt_save_or_delete()
-            time_label.config(text="Time Left: 00")
-            timer_running = False
-            return
+@app.route("/", methods=["GET", "POST"])
+def home():
+    audio_file_path = request.args.get('filename', '')
+    if request.method == 'POST':
+        file = request.files['filename']
+        if file:
+            # Ensure the upload folder exists before saving the file
+            os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+            file.save(file_path)
+            session['file_path'] = file_path
+            text_to_convert = extract_text_from_pdf(file_path)
+            session['text_to_convert'] = text_to_convert
+            flash("File uploaded and text extracted successfully")
+            return render_template("index.html",
+                                   text_to_convert=text_to_convert,
+                                   audio_file_path=audio_file_path) 
+    return render_template("index.html",
+                           text_to_convert=session.get('text_to_convert', ''),
+                           audio_file_path=audio_file_path)
+
+
+def extract_text_from_pdf(file_path):
+    reader = PdfReader(file_path)
+    all_text = ""
+    for page in reader.pages:
+        text = page.extract_text()
+        if text:
+            all_text += text
+    return all_text
+
+
+@app.route("/convert_audio", methods=["GET"])
+def convert_and_save_audio():
+    text_to_convert = session.get('text_to_convert', '')
+    if text_to_convert:
+        cleaned_text = " ".join(text_to_convert.split())
+        text_to_speech = gTTS(cleaned_text)
+
+        audio_file_path = os.path.join(app.config['UPLOAD_FOLDER'], 'output.mp3')
+        text_to_speech.save(audio_file_path)
+        session['audio_file_path'] = 'output.mp3'  # Store audio file path
+        flash(f"Audio saved successfully as {audio_file_path}")
+        return redirect(url_for('home', filename='output.mp3'))
     else:
-        time_label.config(text="Keep it up!")
-    window.after(1000, countdown)
-
-
-def on_key_release(event):
-    """ Record the time when a key is released and starts the timer if it's not already running"""
-    global last_key_release_time, timer_running, popup_shown
-    last_key_release_time = time.time()
-    if not timer_running:
-        timer_running = True
-        popup_shown = False
-        countdown()
-
-
-def on_key_press(event):
-    global timer_running, countdown_time
-    # Stop the timer when a key is pressed
-    timer_running = False
-
-
-def check_elapsed_time():
-    global last_key_release_time
-    # Calculate the elapsed time since the last key release
-    elapsed_time = time.time() - last_key_release_time
-    return elapsed_time
-
-
-def prompt_save_or_delete():
-    text = text_widget.get("1.0", "end-1c")
-    text_widget.delete('1.0', END)
-    if tkinter.messagebox.askyesno("Time's up!", "Do you want to save your text?"):
-        save_text(text)
-    else:
-        delete_text()
-
-
-def save_text(text):
-    with open("test.txt", "w") as text_file:
-        text_file.write(text)
-
-
-def delete_text():
-    with open("test.txt", "w") as text_file:
-        text_file.write("")
-
-
-def restart():
-    global last_key_release_time, timer_running, popup_shown
-    text_widget.delete('1.0', END)
-    time_label.config(text="Keep writing or your text will be lost forever!")
-    last_key_release_time = 0
-    timer_running = False
-    popup_shown = False
-    delete_text()
-
-# Create the main window
-window = Tk()
-window.title("Mik's Disappearing Text")
-window.config(padx=50, pady=50, bg=BACKGROUND_COLOR)
-
-# Initialize variables
-last_key_release_time = 0
-timer_running = False
-popup_shown = False
-
-
-# Create a Text widget
-text_widget = Text(window, height=10, width=40,
-                   wrap='word', font=("Georgia", 25),
-                   bg=BACKGROUND_COLOR, bd=0,  fg="white", insertbackground="#FFF2D7")
-text_widget.grid(column=0, row=3, rowspan=4, sticky="nsew", pady=(20, 20))
-# Bind the text widget to the event for key release
-text_widget.bind("<KeyRelease>", on_key_release)
-text_widget.bind("<KeyPress>", on_key_press)
+        flash("No text available for conversion")
+        return redirect(url_for('home'))
 
 
 
-# Labels
-header_label = Label(text="Disappearing Text",
-                     font=("Georgia", 30, "bold"), fg="#EEF7FF",
-                     bg=BACKGROUND_COLOR)
-header_label.grid(column=0, row=1, pady=5)
+@app.route("/audio/<filename>")
+def get_audio(filename):
+    return send_file(
+        os.path.join(app.config['UPLOAD_FOLDER'], filename),
+        mimetype="audio/mpeg",
+        as_attachment=False
+    )
 
-instructions_label = Label(text=instructions, font=("Georgia", 16),
-                           wraplength=text_widget.winfo_reqwidth(),
-                           justify="center", fg="#EEF7FF", bg=BACKGROUND_COLOR)
-instructions_label.grid(column=0, row=2, pady=5)
 
-time_label = Label(text="Keep writing or your text will be lost forever!", font=("Georgia", 14), fg="#EEF7FF",
-                   bg=BACKGROUND_COLOR)
-time_label.grid(column=0, row=7, pady=6)
-
-button_frame = Frame(window, bg=BACKGROUND_COLOR)
-button_frame.grid(column=0, row=9)
-
-# Create buttons to save and restart the text
-save = Button(button_frame, text="Save File", height="2", width="10",
-              font=("Georgia", 10), overrelief="sunken",
-              command=lambda: save_text(text_widget.get("1.0", "end-1c")))
-save.pack(side=LEFT, padx=10)
-
-restart_button = Button(button_frame, text="Restart",  height="2", width="10",
-              font=("Georgia", 10), overrelief="sunken", command=restart)
-restart_button.pack(side=LEFT)
-
-window.mainloop()
+if __name__ == '__main__':
+    app.run(debug=True)
